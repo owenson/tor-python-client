@@ -89,9 +89,10 @@ while True:
                 print "Server OR IP = ", ip
         print "FIN NETINFO"
 
+# fix packet format!!
         #respond with my net info - we're then good to go!
-        mynetinf = struct.pack(">IBBBBBBBBB", time.time(), peerAddr[0], peerAddr[1], peerAddr[2], peerAddr[3], 1, myip[0], myip[1], myip[2], myip[3])
-        ssl_sock.send(mynetinf)
+#        mynetinf = struct.pack(">BBHIBBBBBBBBB", 0, cmds['NETINFO'], len, time.time(), peerAddr[0], peerAddr[1], peerAddr[2], peerAddr[3], 1, myip[0], myip[1], myip[2], myip[3])
+#        ssl_sock.send(mynetinf)
     elif cmd == "AUTH_CHALLENGE": #response not needed for client-only
         challenge = pl.read(32)
         nmethods = struct.unpack(">H", pl.read(2))[0]
