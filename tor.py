@@ -1,3 +1,5 @@
+from StringIO import StringIO
+import time
 import ssl,socket,struct
 from binascii import hexlify
 
@@ -26,7 +28,7 @@ certTypes = {
 
 s = socket.socket()
 ssl_sock = ssl.wrap_socket(s)
-ssl_sock.connect(("gho.dyndns.org", 9001))
+ssl_sock.connect(("86.59.21.38", 443))
 #VERSIONS Cell circid=0 cmd=7 len=2 ver=3
 ssl_sock.write(struct.pack(">HBHH", 0, 7, 2, 3))
 while True:
@@ -44,17 +46,36 @@ while True:
         plen = 509
 
     payload = ssl_sock.read(plen)
-    print hexlify(payload)
+    pl = StringIO(payload) # io object, just to make sequential reading easier
     if cmd == "CERTS":
-        nCerts = struct.unpack(">B", payload[0])[0]
+        nCerts = struct.unpack(">B", pl.read(1))[0]
         print "Got ", nCerts, " certificates"
-        offset = 1
         for i in range(nCerts):
-            (cType, cLen) = struct.unpack(">BH", payload[offset:offset+3])
-            offset +=3
+            (cType, cLen) = struct.unpack(">BH", pl.read(3))
             print "Certificate: ", cType, certTypes[cType]
-            f = open("cert."+certTypes[cType]+"."+str(i), "w")
-            f.write(payload[offset:offset+cLen])
+            f = open("cert."+certTypes[cType]+"."+str(i), "w")  # write server certs to a file
+            f.write(pl.read(cLen))
             f.close()
-            offset += cLen
+    elif cmd == "NETINFO":
+        pl = StringIO(payload)
+        stime = struct.unpack(">I", pl.read(4))[0]
+        print "Server Time: ", time.ctime(stime)
+        (typ,length) = struct.unpack(">BB", pl.read(2))
+        if typ == 4 and length == 4: #IPv4 address
+            ip = struct.unpack(">BBBB", pl.read(4))
+            print "MY OR IP = ", ip
+        numOfMyAddr = struct.unpack(">B", pl.read(1))[0]
+        for i in range ( numOfMyAddr ):
+            (typ,length) = struct.unpack(">BB", pl.read(2))
+            if typ == 4 and length == 4:#IPv4 address
+                ip = struct.unpack(">BBBB", pl.read(4))
+                print "Server OR IP = ", ip
+        print "FIN NETINFO"
+    elif cmd == "AUTH_CHALLENGE":
+        challenge = pl.read(32)
+        nmethods = struct.unpack(">H", pl.read(2))[0]
+        methods = pl.read(2* nmethods)
+        print "CHAL: ",hexlify(challenge),"NMETHODS: ", nmethods,"METHODS: ",hexlify(methods)
+    else:
+        print hexlify(payload)
 
