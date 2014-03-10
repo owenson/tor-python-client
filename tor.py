@@ -42,10 +42,14 @@ cert_ident.sign(pkey_ident, 'sha1')
 s = socket.socket()
 ssl_sock = ssl.wrap_socket(s)
 ssl_sock.connect(("86.59.21.38", 443))
+peerAddr= [int(x) for x in ssl_sock.getpeername()[0].split(".")]
 #VERSIONS Cell circid=0 cmd=7 len=2 ver=3
 ssl_sock.write(struct.pack(">HBHH", 0, 7, 2, 3))
 while True:
     resp = ssl_sock.read(3)
+    if not resp:
+        print "Disconnected"
+        break
     print "hdr>>", hexlify(resp)
     hdr = struct.unpack(">HB", resp[:3])
     print hdr
@@ -75,8 +79,8 @@ while True:
         print "Server Time: ", time.ctime(stime)
         (typ,length) = struct.unpack(">BB", pl.read(2))
         if typ == 4 and length == 4: #IPv4 address
-            ip = struct.unpack(">BBBB", pl.read(4))
-            print "MY OR IP = ", ip
+            myip = struct.unpack(">BBBB", pl.read(4))
+            print "MY OR IP = ", myip
         numOfMyAddr = struct.unpack(">B", pl.read(1))[0]
         for i in range ( numOfMyAddr ):
             (typ,length) = struct.unpack(">BB", pl.read(2))
@@ -84,11 +88,15 @@ while True:
                 ip = struct.unpack(">BBBB", pl.read(4))
                 print "Server OR IP = ", ip
         print "FIN NETINFO"
-    elif cmd == "AUTH_CHALLENGE":
+
+        #respond with my net info - we're then good to go!
+        mynetinf = struct.pack(">IBBBBBBBBB", time.time(), peerAddr[0], peerAddr[1], peerAddr[2], peerAddr[3], 1, myip[0], myip[1], myip[2], myip[3])
+        ssl_sock.send(mynetinf)
+    elif cmd == "AUTH_CHALLENGE": #response not needed for client-only
         challenge = pl.read(32)
         nmethods = struct.unpack(">H", pl.read(2))[0]
         methods = pl.read(2* nmethods)
         print "CHAL: ",hexlify(challenge),"NMETHODS: ", nmethods,"METHODS: ",hexlify(methods)
-    else:
+    else: #unknown packet
         print hexlify(payload)
 
