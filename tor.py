@@ -1,4 +1,5 @@
 from StringIO import StringIO
+from OpenSSL import crypto
 import time
 import ssl,socket,struct
 from binascii import hexlify
@@ -25,6 +26,18 @@ certTypes = {
         1: "LINK",
         2: "RSAIDENT",
         3: "RSA AUTH" }
+
+print "Generating RSA IDENTITY KEY"
+pkey_ident =crypto.PKey()
+pkey_ident.generate_key(crypto.TYPE_RSA, 1024)
+cert_ident = crypto.X509()
+cert_ident.get_subject().CN = "wwww.ghowen.me"
+cert_ident.set_serial_number(1000)
+cert_ident.gmtime_adj_notBefore(0)
+cert_ident.gmtime_adj_notAfter(10*365*24*60*60)
+cert_ident.set_issuer(cert_ident.get_subject())
+cert_ident.set_pubkey(pkey_ident)
+cert_ident.sign(pkey_ident, 'sha1')
 
 s = socket.socket()
 ssl_sock = ssl.wrap_socket(s)
