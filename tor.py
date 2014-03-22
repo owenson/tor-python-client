@@ -5,6 +5,7 @@ from OpenSSL import crypto
 import time
 import ssl,socket,struct
 from binascii import hexlify
+from Crypto.Hash import SHA
 # cipher = AES CTR (ZERO IV START)
 # HASH = SHA1
 # RSA 1024bit, e=65537, OAEP
@@ -46,20 +47,30 @@ certTypes = {
         2: "RSAIDENT",
         3: "RSA AUTH" }
 
+# cell superclass
+# can instatiate any subclass and call pack() to send
+# calling unpack on Cell will return correct subclass (if exists)
 class Cell(object):
     def __init__(self):
-        pass
-    def encode(self, circId, cell):
-        s = struct.pack(">HB", circId, cell.cmdId)
-        pl = cell.encode()
-        plen  = 509
-        if cell.cmdId == 7 or cell.cmdId == 127:
-            plen = len(pl)
-        if len(pl) < plen:
-            pl += '\x00'*(plen-len(pl))
-        return s + pl
+        self.payload = None
+        self.cmdId = None
+        self.circId = 0
+        self.hdr = None
+    def pack(self, cell=None):
+        if cell==None:
+            cell = self
+        print self.__class__.__name__, (self.circId, cell.cmdId)
 
-    def decode(self, io):
+        s = struct.pack(">HB", self.circId, cell.cmdId)
+        self.pl = cell.encode()
+        self.plen  = 509
+        if cell.cmdId == 7 or cell.cmdId == 127:
+            self.plen = len(self.pl)
+        if len(self.pl) < self.plen:
+            self.pl += '\x00'*(self.plen-len(self.pl))
+        return s + self.pl
+
+    def unpack(self, io):
         self.hdr = struct.unpack(">HB", io.read(3))
         self.cmd = cellTypes[self.hdr[1]]
         print "Got packet: ", self.cmd
@@ -71,13 +82,35 @@ class Cell(object):
             self.plen = 509
 
         self.payload = io.read(self.plen)
-        print "hdr>", self.hdr, "pl>",hexlify(self.payload)
-        return True
+        cell = None
+        if self.cmd == "VERSIONS":
+            cell = CellVersions(self.payload)
+        elif self.cmd == "CERTS":
+            cell = CellCerts(self.payload)
+        elif self.cmd == "NETINFO":
+            cell = CellNetInfo(self.payload)
+        else:
+            cell = CellUnkown(self.payload)
+        cell.circId = self.hdr[0]
+        cell.cmdId = self.hdr[1]
+        cell.hdr = self.hdr
+        cell.payload = self.payload
 
-class CellCerts(object):
-    def __init__(self):
+        print "hdr>", self.hdr, "pl>",hexlify(self.payload)
+        return cell
+
+class CellUnkown(Cell):
+    def __init__(self, pkt=None):
+        Cell.__init__(self)
+    def decode(self, payload):
+        Cell.payload = payload
+
+class CellCerts(Cell):
+    def __init__(self, pkt=None):
+        Cell.__init__(self)
         self.cmdId = cellTypeToId("CERTS")
-        pass
+        if pkt!=None:
+            self.decode(pkt)
     def decode(self,payload):
         pl = StringIO(payload)
         nCerts = struct.unpack(">B", pl.read(1))[0]
@@ -87,10 +120,12 @@ class CellCerts(object):
             self.certs.append ( {'cType': certTypes[cType], 'data': pl.read(cLen) } )
         return True
 
-class CellNetInfo(object):
-    def __init__(self):
+class CellNetInfo(Cell):
+    def __init__(self, pkt=None):
+        Cell.__init__(self)
         self.cmdId = cellTypeToId("NETINFO")
-        pass
+        if pkt!=None:
+            self.decode(pkt)
     def decode(self,payload):
         pl = StringIO(payload)
         stime = struct.unpack(">I", pl.read(4))[0]
@@ -112,12 +147,16 @@ class CellNetInfo(object):
         s = struct.pack(">I", time.time())
         s += struct.pack(">BB4B", 4, 4, *self.serveraddresses[0])
         s += struct.pack(">BBB4B", 1, 4, 4, *self.myip)
+        Cell.payload = s
         return s
 
 # set versions = [ .... ]
-class CellVersions(object):
-    def __init__(self):
+class CellVersions(Cell):
+    def __init__(self,pkt=None):
+        Cell.__init__(self)
         self.cmdId = cellTypeToId("VERSIONS")
+        if pkt!=None:
+            self.decode(pkt)
         pass
     def decode(self, payload):
         self.versions = []
@@ -127,7 +166,31 @@ class CellVersions(object):
         st = struct.pack(">H", len(self.versions)*2)
         for v in self.versions:
             st += struct.pack(">H", v)
+        Cell.payload = st
         return st
+
+# recv next cell from network and return it
+# if cmd specified (class name), then wait for that cell and return it - discard others
+def recv_cell(io, cmd=None):
+    while True:
+        c = Cell()
+        cell = c.unpack(io)
+        print "Recv cell ", cell.__class__.__name__
+        if cmd==None:
+            return cell
+        elif cell.__class__.__name__ == cmd:
+            return cell
+        print "Ignoring cell"
+
+#Tor KDF function
+def kdf_tor(K0, length):
+    K = ''
+    i = 0
+    while len(K) < length:
+        K += SHA.new(K0 + chr(i)).digest()
+        i+=1
+    return K
+
 
 print "Generating RSA IDENTITY KEY"
 pkey_ident =crypto.PKey()
@@ -145,42 +208,47 @@ s = socket.socket()
 ssl_sock = ssl.wrap_socket(s)
 ssl_sock.connect(("86.59.21.38", 443))
 peerAddr= [int(x) for x in ssl_sock.getpeername()[0].split(".")]
-#VERSIONS Cell circid=0 cmd=7 len=2 ver=3
-#ssl_sock.write(struct.pack(">HBHH", 0, 7, 2, 3))
-c = Cell()
+
+# Send our versions cell to get started
 cv = CellVersions()
 cv.versions = [3]
-pkt = c.encode(0, cv)
-ssl_sock.write(pkt)
-while True:
-    c = Cell()
-    c.decode(ssl_sock)
+ssl_sock.write(cv.pack())
 
-    if c.cmd == "CERTS":
-        cc = CellCerts()
-        if cc.decode(c.payload):
-            print "certs decoded ok"
-    elif c.cmd == "VERSIONS":
-        cv = CellVersions()
-        if cv.decode(c.payload):
-            print "versions decoded ok"
-    elif c.cmd == "NETINFO":
-        cni = CellNetInfo()
-        if cni.decode(c.payload):
-            print "netinfo decoded ok"
+# Wait for NetInfo, ignoring others and then send our netinfo
+cnetinf = recv_cell(ssl_sock, 'CellNetInfo')
+ssl_sock.send(cnetinf.pack())
 
-        mycni = c.encode(0,cni)
-        ssl_sock.send(mycni)    #respond with my netinfo my reversing info sent by server
+# Handshakes complete
+x = os.urandom(HASH_LEN)
+ssl_sock.send(struct.pack(">HB", 5, cellTypeToId("CREATE_FAST")) + x + '\x00'*(509-HASH_LEN))
+ccreatedfast = recv_cell(ssl_sock)
+y = ccreatedfast.payload[:HASH_LEN]
+derkd = ccreatedfast.payload[HASH_LEN:2*HASH_LEN]
+print hexlify(x),hexlify(y),hexlify(derkd)
+KK = StringIO(kdf_tor(x+y, 3*HASH_LEN + 2*KEY_LEN))
+(KH, Df, Db) = [KK.read(HASH_LEN) for i in range(3)]
+(Kf, Kb) = [KK.read(KEY_LEN) for i in range(2)]
+if derkd != KH:
+    print "Key check failed"
+print hexlify(KH)
 
-        x = os.urandom(HASH_LEN)
-        ssl_sock.send(struct.pack(">HB", 5, cellTypeToId("CREATE_FAST")) + x + '\x00'*(509-HASH_LEN))
-
-    elif c.cmd == "AUTH_CHALLENGE": #response not needed for client-only
-        pl = StringIO(c.payload)
-        challenge = pl.read(32)
-        nmethods = struct.unpack(">H", pl.read(2))[0]
-        methods = pl.read(2* nmethods)
-        print "CHAL: ",hexlify(challenge),"NMETHODS: ", nmethods,"METHODS: ",hexlify(methods)
-    else: #unknown packet
-        print c.cmd,c.hdr[1],"??>", hexlify(c.payload)
-
+#while True:
+#    cell = recv_cell(ssl_sock)
+#    print cell.__class__.__name__
+#
+#    if isinstance(cell, CellNetInfo):
+#        mycni = cell.pack()
+#        ssl_sock.send(mycni)    #respond with my netinfo my reversing info sent by server
+#
+#        x = os.urandom(HASH_LEN)
+#        ssl_sock.send(struct.pack(">HB", 5, cellTypeToId("CREATE_FAST")) + x + '\x00'*(509-HASH_LEN))
+#
+##    elif c.cmd == "AUTH_CHALLENGE": #response not needed for client-only
+##        pl = StringIO(c.payload)
+##        challenge = pl.read(32)
+##        nmethods = struct.unpack(">H", pl.read(2))[0]
+##        methods = pl.read(2* nmethods)
+##        print "CHAL: ",hexlify(challenge),"NMETHODS: ", nmethods,"METHODS: ",hexlify(methods)
+#    else: #unknown packet
+#        print cellTypes[cell.cmdId],cell.hdr[1],"??>", hexlify(cell.payload)
+#
