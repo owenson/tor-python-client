@@ -6,6 +6,7 @@ import time
 import ssl,socket,struct
 from binascii import hexlify
 from Crypto.Hash import SHA
+import consensus
 # cipher = AES CTR (ZERO IV START)
 # HASH = SHA1
 # RSA 1024bit, e=65537, OAEP
