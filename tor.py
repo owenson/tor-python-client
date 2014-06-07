@@ -1,4 +1,6 @@
 from StringIO import StringIO
+import binascii
+from collections import namedtuple
 import pprint
 import os
 from OpenSSL import crypto
@@ -6,6 +8,8 @@ import time
 import ssl,socket,struct
 from binascii import hexlify
 from Crypto.Hash import SHA
+from Crypto.Cipher import *
+from Crypto.Util import Counter
 import consensus
 # cipher = AES CTR (ZERO IV START)
 # HASH = SHA1
@@ -65,14 +69,15 @@ class Cell(object):
         s = struct.pack(">HB", self.circId, cell.cmdId)
         self.pl = cell.encode()
         self.plen  = 509
-        if cell.cmdId == 7 or cell.cmdId == 127:
+        if cell.cmdId == 7 or cell.cmdId > 127:
             self.plen = len(self.pl)
         if len(self.pl) < self.plen:
             self.pl += '\x00'*(self.plen-len(self.pl))
         return s + self.pl
 
     def unpack(self, io):
-        self.hdr = struct.unpack(">HB", io.read(3))
+        hdrbytes = io.read(3)
+        self.hdr = struct.unpack(">HB", hdrbytes)
         self.cmd = cellTypes[self.hdr[1]]
         print "Got packet: ", self.cmd
 
@@ -82,7 +87,11 @@ class Cell(object):
         else: #fixed length packet
             self.plen = 509
 
-        self.payload = io.read(self.plen)
+        #receive payload
+        self.payload = ''
+        while len(self.payload) != self.plen:
+            self.payload += io.read(self.plen-len(self.payload))
+
         cell = None
         if self.cmd == "VERSIONS":
             cell = CellVersions(self.payload)
@@ -207,7 +216,7 @@ cert_ident.sign(pkey_ident, 'sha1')
 
 s = socket.socket()
 ssl_sock = ssl.wrap_socket(s)
-ssl_sock.connect(("86.59.21.38", 443))
+ssl_sock.connect(("94.242.246.24", 8080))
 peerAddr= [int(x) for x in ssl_sock.getpeername()[0].split(".")]
 
 # Send our versions cell to get started
@@ -228,10 +237,65 @@ derkd = ccreatedfast.payload[HASH_LEN:2*HASH_LEN]
 print hexlify(x),hexlify(y),hexlify(derkd)
 KK = StringIO(kdf_tor(x+y, 3*HASH_LEN + 2*KEY_LEN))
 (KH, Df, Db) = [KK.read(HASH_LEN) for i in range(3)]
+
+fwdSha = SHA.new()
+fwdSha.update(Df)
+bwdSha = SHA.new()
+bwdSha.update(Db)
+
 (Kf, Kb) = [KK.read(KEY_LEN) for i in range(2)]
+ctr = Counter.new(128,initial_value=0)
+fwdCipher = AES.new(Kf, AES.MODE_CTR, counter=ctr)
+ctr = Counter.new(128,initial_value=0)
+bwdCipher = AES.new(Kb, AES.MODE_CTR, counter=ctr)
 if derkd != KH:
     print "Key check failed"
+
+TorHop = namedtuple("TorHop", 'fwdSha bwdSha fwdCipher bwdCipher')
+t1 = TorHop(fwdSha=fwdSha, bwdSha=bwdSha, fwdCipher=fwdCipher, bwdCipher=bwdCipher)
 print hexlify(KH)
+
+def buildRelayCell(torhop, relCmd, streamId, data):
+#construct pkt
+    pkt = struct.pack(">BHHLH", relCmd, 0, streamId, 0, len(data)) + data
+    pkt += "\x00" * (509 - len(pkt))
+#update rolling sha1 hash (with digest set to all zeroes)
+    torhop.fwdSha.update(pkt)
+#splice in hash
+    pkt = pkt[0:5] + torhop.fwdSha.digest()[0:4] + pkt[9:]
+    print "relay contents: ", pkt.encode('hex')
+#encrypt
+    return torhop.fwdCipher.encrypt(pkt)
+
+#Build DIR CONNECT (ignore slashdot stuff, just junk payload
+hostrel = "www.slashdot.org:80"
+pktresolv = hostrel +"\x00\x00\x00\x00\x00"
+pktrelayresolv = buildRelayCell(t1, 13, 1, pktresolv)
+final = struct.pack(">HB", 5, cellTypeToId("RELAY_EARLY")) + pktrelayresolv
+
+ssl_sock.send(final)
+
+#this should be connected response
+relay_reply = recv_cell(ssl_sock)
+relay_reply = t1.bwdCipher.decrypt(relay_reply.payload)
+print struct.unpack(">BHHLH", relay_reply[:11])
+
+print "decrypted: ", binascii.hexlify(relay_reply[11:])
+print relay_reply[2:]
+
+#now send HTTP Request and loop through response packets
+reldat = buildRelayCell(t1, 2, 1, "GET /tor/status-vote/current/consensus HTTP/1.0\r\n\r\n")
+final = struct.pack(">HB", 5, cellTypeToId("RELAY_EARLY")) + reldat
+ssl_sock.send(final)
+
+
+while True:
+    relay_reply = recv_cell(ssl_sock)
+    relay_reply = t1.bwdCipher.decrypt(relay_reply.payload)
+    print struct.unpack(">BHHLH", relay_reply[:11])
+
+    print "decrypted: ", binascii.hexlify(relay_reply[11:])
+    print relay_reply[11:]
 
 #while True:
 #    cell = recv_cell(ssl_sock)

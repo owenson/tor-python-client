@@ -4,6 +4,7 @@ import binascii
 import base64
 import pprint
 import urllib2
+import zlib
 flags = {}
 router = {}
 total = 0
@@ -14,8 +15,9 @@ print "fetching consensus"
 def getDoc(doc):
     return urllib2.urlopen("http://86.59.21.38/tor/"+doc).read()
 
-consensus_txt = getDoc("status-vote/current/consensus")
+consensus_txt = zlib.decompress(getDoc("status-vote/current/consensus.z"))
 
+# Parse the consensus into a dict
 for l in consensus_txt.splitlines():
     q = l.strip().split(" ")
     if q[0] == 'r': #router descriptor
@@ -39,20 +41,34 @@ for l in consensus_txt.splitlines():
     if q[0] == 'v':
         router[curRouter]['version'] = ' '.join(q[1:])
 
+# Fetch router descrition array given name
 def getRouter(nm):
     for r in router.itervalues():
         if r['nick'] == nm:
             return r
     return None
 
+# Fetch text router descriptor containing keys
 def getRouterDescriptor(identityhash):
     if router[identityhash.decode('hex')]:
         return getDoc("server/fp/"+identityhash)
     return None
 
+# parse router descriptor and return onion key in ber/der format for import into PyCrypto
+def getRouterOnionKey(routerdesc):
+    lns = routerdesc.splitlines()
+    okidx = lns.index("onion-key") + 2
+    onionk = ""
+    while "END" not in lns[okidx]:
+        onionk += lns[okidx]
+        okidx += 1
+    return base64.b64decode(onionk)
 
-
-#gho = getRouter("gho")
-#print getRouterDescriptor(gho['identityhash'])
+gho = getRouter("gho")
+rtdesc = getRouterDescriptor(gho['identityhash'])
+print rtdesc
+#okey = getRouterOnionKey(rtdesc)
+#from Crypto.PublicKey import RSA
+#print RSA.importKey(okey)
 #print getDoc("server/fp/"+gho['identityhash'])
 #pprint.pprint( router)
