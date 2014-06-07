@@ -9,48 +9,12 @@ import ssl,socket,struct
 from binascii import hexlify
 from Crypto.Hash import SHA
 from Crypto.Cipher import *
+from Crypto.PublicKey import *
+import sys
 from Crypto.Util import Counter
 import consensus
-# cipher = AES CTR (ZERO IV START)
-# HASH = SHA1
-# RSA 1024bit, e=65537, OAEP
-KEY_LEN=16
-DH_LEN=128
-DH_SEC_LEN=40
-PK_ENC_LEN=128
-PK_PAD_LEN=42
-HASH_LEN=20
-# hash of pub key = sha1 hash of der encoding of asn.1 rsa public key
-#PKCS1_OAEP.PKCS1OAEP_Cipher(rsa, None, None, None)
 
-#def hybridEncrypt(m, rsa):
-
-
-cellTypes = {
-         1: "CREATE",
-         2: "CREATED",
-         3: "RELAY",
-         4: "DESTROY",
-         5: "CREATE_FAST",
-         6: "CREATED_FAST",
-         8: "NETINFO",
-         9: "RELAY_EARLY",
-         10: "CREATE2",
-         11: "CREATED2",
-         7: "VERSIONS",
-         128: "VPADDING",
-         129: "CERTS",
-         130: "AUTH_CHALLENGE",
-         131: "AUTHENTICATE",
-         132: "AUTHORIZE" }
-
-def cellTypeToId(typ):
-    return cellTypes.values().index(typ)
-
-certTypes = {
-        1: "LINK",
-        2: "RSAIDENT",
-        3: "RSA AUTH" }
+from torfuncs import *
 
 # cell superclass
 # can instatiate any subclass and call pack() to send
@@ -64,33 +28,15 @@ class Cell(object):
     def pack(self, cell=None):
         if cell==None:
             cell = self
+
         print self.__class__.__name__, (self.circId, cell.cmdId)
 
-        s = struct.pack(">HB", self.circId, cell.cmdId)
-        self.pl = cell.encode()
-        self.plen  = 509
-        if cell.cmdId == 7 or cell.cmdId > 127:
-            self.plen = len(self.pl)
-        if len(self.pl) < self.plen:
-            self.pl += '\x00'*(self.plen-len(self.pl))
-        return s + self.pl
+        return buildCell(self.circId, self.cmdId, cell.encode());
 
     def unpack(self, io):
-        hdrbytes = io.read(3)
-        self.hdr = struct.unpack(">HB", hdrbytes)
-        self.cmd = cellTypes[self.hdr[1]]
+        self.circId, self.cmdId, self.payload = decodeCell(io)
+        self.cmd = cellTypes[self.cmdId]
         print "Got packet: ", self.cmd
-
-        if self.hdr[1] > 127 or self.hdr[1] == 7: # var length packet
-            plenbytes = io.read(2)
-            self.plen = struct.unpack(">H", plenbytes)[0]
-        else: #fixed length packet
-            self.plen = 509
-
-        #receive payload
-        self.payload = ''
-        while len(self.payload) != self.plen:
-            self.payload += io.read(self.plen-len(self.payload))
 
         cell = None
         if self.cmd == "VERSIONS":
@@ -101,8 +47,8 @@ class Cell(object):
             cell = CellNetInfo(self.payload)
         else:
             cell = CellUnkown(self.payload)
-        cell.circId = self.hdr[0]
-        cell.cmdId = self.hdr[1]
+        cell.circId = self.circId
+        cell.cmdId = self.cmdId
         cell.hdr = self.hdr
         cell.payload = self.payload
 
@@ -192,27 +138,8 @@ def recv_cell(io, cmd=None):
             return cell
         print "Ignoring cell"
 
-#Tor KDF function
-def kdf_tor(K0, length):
-    K = ''
-    i = 0
-    while len(K) < length:
-        K += SHA.new(K0 + chr(i)).digest()
-        i+=1
-    return K
-
-
-print "Generating RSA IDENTITY KEY"
-pkey_ident =crypto.PKey()
-pkey_ident.generate_key(crypto.TYPE_RSA, 1024)
-cert_ident = crypto.X509()
-cert_ident.get_subject().CN = "wwww.ghowen.me"
-cert_ident.set_serial_number(1000)
-cert_ident.gmtime_adj_notBefore(0)
-cert_ident.gmtime_adj_notAfter(10*365*24*60*60)
-cert_ident.set_issuer(cert_ident.get_subject())
-cert_ident.set_pubkey(pkey_ident)
-cert_ident.sign(pkey_ident, 'sha1')
+print "getting consensus"
+consensus.fetchConsensus()
 
 s = socket.socket()
 ssl_sock = ssl.wrap_socket(s)
@@ -228,74 +155,44 @@ ssl_sock.write(cv.pack())
 cnetinf = recv_cell(ssl_sock, 'CellNetInfo')
 ssl_sock.send(cnetinf.pack())
 
-# Handshakes complete
-x = os.urandom(HASH_LEN)
-ssl_sock.send(struct.pack(">HB", 5, cellTypeToId("CREATE_FAST")) + x + '\x00'*(509-HASH_LEN))
-ccreatedfast = recv_cell(ssl_sock)
-y = ccreatedfast.payload[:HASH_LEN]
-derkd = ccreatedfast.payload[HASH_LEN:2*HASH_LEN]
-print hexlify(x),hexlify(y),hexlify(derkd)
-KK = StringIO(kdf_tor(x+y, 3*HASH_LEN + 2*KEY_LEN))
-(KH, Df, Db) = [KK.read(HASH_LEN) for i in range(3)]
+# CREATE CIRCUIT TO FIRST HOP
+r = consensus.getRouter("orion")
+(x, create) = buildCreateCell(r['identityhash'], 1)
+ssl_sock.send(create)
+created = recv_cell(ssl_sock).payload
+t1 = decodeCreatedCell(created, x)
+print t1
 
-fwdSha = SHA.new()
-fwdSha.update(Df)
-bwdSha = SHA.new()
-bwdSha.update(Db)
-
-(Kf, Kb) = [KK.read(KEY_LEN) for i in range(2)]
-ctr = Counter.new(128,initial_value=0)
-fwdCipher = AES.new(Kf, AES.MODE_CTR, counter=ctr)
-ctr = Counter.new(128,initial_value=0)
-bwdCipher = AES.new(Kb, AES.MODE_CTR, counter=ctr)
-if derkd != KH:
-    print "Key check failed"
-
-TorHop = namedtuple("TorHop", 'fwdSha bwdSha fwdCipher bwdCipher')
-t1 = TorHop(fwdSha=fwdSha, bwdSha=bwdSha, fwdCipher=fwdCipher, bwdCipher=bwdCipher)
-print hexlify(KH)
-
-def buildRelayCell(torhop, relCmd, streamId, data):
-#construct pkt
-    pkt = struct.pack(">BHHLH", relCmd, 0, streamId, 0, len(data)) + data
-    pkt += "\x00" * (509 - len(pkt))
-#update rolling sha1 hash (with digest set to all zeroes)
-    torhop.fwdSha.update(pkt)
-#splice in hash
-    pkt = pkt[0:5] + torhop.fwdSha.digest()[0:4] + pkt[9:]
-    print "relay contents: ", pkt.encode('hex')
-#encrypt
-    return torhop.fwdCipher.encrypt(pkt)
-
-#Build DIR CONNECT (ignore slashdot stuff, just junk payload
+##Build DIR CONNECT (ignore slashdot stuff, just junk payload
 hostrel = "www.slashdot.org:80"
-pktresolv = hostrel +"\x00\x00\x00\x00\x00"
+pktresolv = hostrel +"\x00"
 pktrelayresolv = buildRelayCell(t1, 13, 1, pktresolv)
-final = struct.pack(">HB", 5, cellTypeToId("RELAY_EARLY")) + pktrelayresolv
-
+final = buildCell(1, cellTypeToId("RELAY_EARLY"), pktrelayresolv)
+#
 ssl_sock.send(final)
+#
+##this should be connected response
+print "waiting..."
+relay_reply = t1.decrypt(recv_cell(ssl_sock).payload)
 
-#this should be connected response
-relay_reply = recv_cell(ssl_sock)
-relay_reply = t1.bwdCipher.decrypt(relay_reply.payload)
 print struct.unpack(">BHHLH", relay_reply[:11])
-
+#
 print "decrypted: ", binascii.hexlify(relay_reply[11:])
-print relay_reply[2:]
-
-#now send HTTP Request and loop through response packets
-reldat = buildRelayCell(t1, 2, 1, "GET /tor/status-vote/current/consensus HTTP/1.0\r\n\r\n")
-final = struct.pack(">HB", 5, cellTypeToId("RELAY_EARLY")) + reldat
-ssl_sock.send(final)
-
-
-while True:
-    relay_reply = recv_cell(ssl_sock)
-    relay_reply = t1.bwdCipher.decrypt(relay_reply.payload)
-    print struct.unpack(">BHHLH", relay_reply[:11])
-
-    print "decrypted: ", binascii.hexlify(relay_reply[11:])
-    print relay_reply[11:]
+#print relay_reply[2:]
+#
+##now send HTTP Request and loop through response packets
+#reldat = buildRelayCell(t1, 2, 1, "GET /tor/status-vote/current/consensus HTTP/1.0\r\n\r\n")
+#final = struct.pack(">HB", 5, cellTypeToId("RELAY_EARLY")) + reldat
+#ssl_sock.send(final)
+#
+#
+#while True:
+#    relay_reply = recv_cell(ssl_sock)
+#    relay_reply = t1.bwdCipher.decrypt(relay_reply.payload)
+#    print struct.unpack(">BHHLH", relay_reply[:11])
+#
+#    print "decrypted: ", binascii.hexlify(relay_reply[11:])
+#    print relay_reply[11:]
 
 #while True:
 #    cell = recv_cell(ssl_sock)

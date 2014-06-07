@@ -1,0 +1,21 @@
+
+#print "Generating RSA IDENTITY KEY"
+#pkey_ident =crypto.PKey()
+#pkey_ident.generate_key(crypto.TYPE_RSA, 1024)
+#cert_ident = crypto.X509()
+#cert_ident.get_subject().CN = "wwww.ghowen.me"
+#cert_ident.set_serial_number(1000)
+#cert_ident.gmtime_adj_notBefore(0)
+#cert_ident.gmtime_adj_notAfter(10*365*24*60*60)
+#cert_ident.set_issuer(cert_ident.get_subject())
+#cert_ident.set_pubkey(pkey_ident)
+#cert_ident.sign(pkey_ident, 'sha1')
+
+# Handshakes complete
+#ssl_sock.send(struct.pack(">HB", 5, cellTypeToId("CREATE_FAST")) + x + '\x00'*(509-HASH_LEN))
+#ccreatedfast = recv_cell(ssl_sock)
+#y = ccreatedfast.payload[:HASH_LEN]
+#derkd = ccreatedfast.payload[HASH_LEN:2*HASH_LEN]
+#print hexlify(x),hexlify(y),hexlify(derkd)
+#KK = StringIO(kdf_tor(x+y, 3*HASH_LEN + 2*KEY_LEN))
+#
