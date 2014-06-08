@@ -160,6 +160,7 @@ r = consensus.getRouter("orion")
 (x, create) = buildCreatePayload(r['identityhash'])
 createcell = buildCell(1, cellTypeToId("CREATE"), create)
 ssl_sock.send(createcell)
+# RECEIVE CREATED CELL
 created = recv_cell(ssl_sock).payload
 t1 = decodeCreatedCell(created, x)
 print t1
@@ -174,22 +175,14 @@ print t1
 #
 ##this should be connected response
 
-# must be wrapped in relay_early
-def buildExtendPayload(identityhash):
-    r = consensus.router[identityhash]
-    ip = map(int,r['ip'].split("."))
-    extend = struct.pack(">BBBBH", ip[0], ip[1], ip[2], ip[3], int(r['orport']))
-    (x, extendcc) = buildCreatePayload(r['identityhash'])
-    extend += extendcc
-    extend += r['identity']
-    return (x, extend)
-
 #r = consensus.getRouter("gho")
+
+# EXTEND CIRCUIT - BUILD EXTEND CELL
 (x,extend)=buildExtendPayload(consensus.getRouter("gho")['identity'])
 extendr = buildRelayCell(t1, 6, 0, extend)
 ssl_sock.send(buildCell(1, cellTypeToId("RELAY_EARLY"), extendr))
 
-print "waiting..."
+# RECEIVE EXTENDED CELL
 relay = recv_cell(ssl_sock).payload
 extended = t1.decrypt(relay)
 relayDec = decodeRelayCell(extended)

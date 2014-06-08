@@ -132,6 +132,7 @@ def kdf_tor(K0, length):
     return K
 
 #packs a number as big endian into nbytes
+#e.g. struct but specify field size
 def numpack(n, nbytes):
     n2 = hex(n)[2:-1]
     if(len (n2) % 2 != 0) and nbytes != 0:
@@ -139,6 +140,7 @@ def numpack(n, nbytes):
     n2 = n2.decode('hex')
     return "\x00" * (nbytes - len(n2)) + n2
 
+#decodes big endian integer into integer
 def numunpack(s):
     return int(s.encode("hex"),16)
 
@@ -159,6 +161,8 @@ def buildCreatePayload(identityHash):
     #pkt = struct.pack(">HB", circId, cellTypeToId("CREATE")) + createpayload + "\x00" * (509-len(createpayload))
     return (x, createpayload)
 
+#decodes created cell and builds a TorHop object (containing shared key data)
+#also used by extended cell decoder as payload is identical
 def decodeCreatedCell(created, x):
 # other side pub key
     Y = created[:DH_LEN]
@@ -175,6 +179,7 @@ def decodeCreatedCell(created, x):
         print "derkd check failed"
         sys.exit(0)
 
+#constructs relay cell payload and encrypts to torhop
 def buildRelayCell(torhop, relCmd, streamId, data):
 #construct pkt
     pkt = struct.pack(">BHHLH", relCmd, 0, streamId, 0, len(data)) + data
@@ -187,7 +192,20 @@ def buildRelayCell(torhop, relCmd, streamId, data):
 #encrypt
     return torhop.encrypt(pkt)
 
+#takes relay cell payload and decodes it
 def decodeRelayCell(cell):
     celldata = dict(zip(['relayCmd', 'recognised', 'streamId', 'digest', 'length'], struct.unpack(">BHHLH", cell[:11])))
     celldata['payload'] = cell[11:celldata['length']+11]
     return celldata
+
+# must be wrapped in relay_early
+# builds extend cell to router identified by identity
+def buildExtendPayload(identityhash):
+    r = consensus.router[identityhash]
+    ip = map(int,r['ip'].split("."))
+    extend = struct.pack(">BBBBH", ip[0], ip[1], ip[2], ip[3], int(r['orport']))
+    (x, extendcc) = buildCreatePayload(r['identityhash'])
+    extend += extendcc
+    extend += r['identity']
+    return (x, extend)
+
