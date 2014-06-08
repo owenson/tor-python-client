@@ -143,7 +143,7 @@ def numunpack(s):
     return int(s.encode("hex"),16)
 
 #returns private x and created pkt
-def buildCreateCell(identityHash, circId):
+def buildCreatePayload(identityHash):
 #get router rsa onion key
     rd = consensus.getRouterDescriptor(identityHash)
     rdk = consensus.getRouterOnionKey(rd)
@@ -156,8 +156,8 @@ def buildCreateCell(identityHash, circId):
 #encrypt X to remote
     createpayload = hybridEncrypt(rsa,numpack(X, DH_LEN))
 #pack packet
-    pkt = struct.pack(">HB", circId, cellTypeToId("CREATE")) + createpayload + "\x00" * (509-len(createpayload))
-    return (x, pkt)
+    #pkt = struct.pack(">HB", circId, cellTypeToId("CREATE")) + createpayload + "\x00" * (509-len(createpayload))
+    return (x, createpayload)
 
 def decodeCreatedCell(created, x):
 # other side pub key
@@ -187,3 +187,7 @@ def buildRelayCell(torhop, relCmd, streamId, data):
 #encrypt
     return torhop.encrypt(pkt)
 
+def decodeRelayCell(cell):
+    celldata = dict(zip(['relayCmd', 'recognised', 'streamId', 'digest', 'length'], struct.unpack(">BHHLH", cell[:11])))
+    celldata['payload'] = cell[11:celldata['length']+11]
+    return celldata

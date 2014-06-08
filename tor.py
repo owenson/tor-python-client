@@ -157,27 +157,49 @@ ssl_sock.send(cnetinf.pack())
 
 # CREATE CIRCUIT TO FIRST HOP
 r = consensus.getRouter("orion")
-(x, create) = buildCreateCell(r['identityhash'], 1)
-ssl_sock.send(create)
+(x, create) = buildCreatePayload(r['identityhash'])
+createcell = buildCell(1, cellTypeToId("CREATE"), create)
+ssl_sock.send(createcell)
 created = recv_cell(ssl_sock).payload
 t1 = decodeCreatedCell(created, x)
 print t1
 
 ##Build DIR CONNECT (ignore slashdot stuff, just junk payload
-hostrel = "www.slashdot.org:80"
-pktresolv = hostrel +"\x00"
-pktrelayresolv = buildRelayCell(t1, 13, 1, pktresolv)
-final = buildCell(1, cellTypeToId("RELAY_EARLY"), pktrelayresolv)
-#
-ssl_sock.send(final)
+#hostrel = "www.slashdot.org:80"
+#pktresolv = hostrel +"\x00"
+#pktrelayresolv = buildRelayCell(t1, 13, 1, pktresolv)
+#final = buildCell(1, cellTypeToId("RELAY_EARLY"), pktrelayresolv)
+##
+#ssl_sock.send(final)
 #
 ##this should be connected response
-print "waiting..."
-relay_reply = t1.decrypt(recv_cell(ssl_sock).payload)
 
-print struct.unpack(">BHHLH", relay_reply[:11])
+# must be wrapped in relay_early
+def buildExtendPayload(identityhash):
+    r = consensus.router[identityhash]
+    ip = map(int,r['ip'].split("."))
+    extend = struct.pack(">BBBBH", ip[0], ip[1], ip[2], ip[3], int(r['orport']))
+    (x, extendcc) = buildCreatePayload(r['identityhash'])
+    extend += extendcc
+    extend += r['identity']
+    return (x, extend)
+
+#r = consensus.getRouter("gho")
+(x,extend)=buildExtendPayload(consensus.getRouter("gho")['identity'])
+extendr = buildRelayCell(t1, 6, 0, extend)
+ssl_sock.send(buildCell(1, cellTypeToId("RELAY_EARLY"), extendr))
+
+print "waiting..."
+relay = recv_cell(ssl_sock).payload
+extended = t1.decrypt(relay)
+relayDec = decodeRelayCell(extended)
+t2 = decodeCreatedCell(relayDec['payload'], x)
+
+
+#print struct.unpack(">BHHLH", relay_reply[:11])
 #
-print "decrypted: ", binascii.hexlify(relay_reply[11:])
+#print "decrypted: ", binascii.hexlify(relay_reply[11:])
+
 #print relay_reply[2:]
 #
 ##now send HTTP Request and loop through response packets

@@ -21,7 +21,7 @@ def fetchConsensus():
     for l in consensus_txt.splitlines():
         q = l.strip().split(" ")
         if q[0] == 'r': #router descriptor
-            rfmt = ['nick', 'identity', 'digest', 'pubdate', 'pubtime', 'ip', 'opport', 'dirport']
+            rfmt = ['nick', 'identity', 'digest', 'pubdate', 'pubtime', 'ip', 'orport', 'dirport']
             data = dict(zip(rfmt, q[1:]))
             idt= data['identity']
             idt += "=" * (4-len(idt)%4) # pad b64 string
