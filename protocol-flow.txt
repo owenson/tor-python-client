@@ -1,0 +1,17 @@
+CLIENT                               SERVER
+VERSIONS                   --->
+                           <---      VERSIONS
+                           <---      CERTS, NETINFO, AUTHCHALLENGE
+NETINFO                    --->
+CREATE                     --->
+                           <---      CREATED  
+             
+             both sides construct shared secrets using tor-kdf
+             server is called hop1
+
+RELAY_EARLY(aes[EXTEND])   --->               (note extend encrypted using aes-ctr to hop1)
+                           <---      RELAY(aes[EXTENDED])   (extended encrypted by hop1)
+
+             both sides construct shared secrets (e.g. client and hop 2)
+
+
