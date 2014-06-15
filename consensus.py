@@ -44,7 +44,7 @@ def fetchConsensus():
 # Fetch router descrition array given name
 def getRouter(nm):
     for r in router.itervalues():
-        if nm.startswith("$") and r['identityhash'] == nm:
+        if nm.startswith("$") and r['identityhash'] == nm[1:]:
             return r
         elif r['nick'] == nm:
             return r
