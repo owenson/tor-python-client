@@ -131,7 +131,7 @@ class TorCircuit():
         self.circId = circid
         self.socket = sock
         self.tempX = 0
-        self.packetCount = 0
+        self.packetSendCount = 0
 
 #parse relaycell as str
     def encrypt(self, relayCell):
@@ -161,8 +161,16 @@ class TorCircuit():
     def extend(self, hopHash):
         (self.tempX,extend)=buildExtendPayload(hopHash)
         extendr = buildRelayCell(self.hops[-1], relayTypeToCmdId("RELAY_EXTEND"), 0, extend)
-        extendr = self.encrypt(extendr)
-        self.socket.send(buildCell(self.circId, cellTypeToId("RELAY_EARLY"), extendr))
+        self.send(extendr)
+
+    def send(self, pktAsStr):
+        pktenc = self.encrypt(pktAsStr)
+        typ = cellTypeToId("RELAY_EARLY" if self.packetSendCount <8 else "RELAY")
+        self.socket.send(buildCell(self.circId, typ, pktenc))
+        self.packetSendCount += 1
+
+    def recv(self, pktAsStr):
+        pass
 
 #parse full torcell
     def handleExtended(self, cell):
@@ -173,6 +181,12 @@ class TorCircuit():
         assert relayDec['relayCmd'] == relayTypeToCmdId("RELAY_EXTENDED")
         t2 = decodeCreatedCell(relayDec['payload'], self.tempX)
         self.hops.append(t2)
+
+    def createStream(self,strId, host, port):
+        payload = host + ":" + str(port) + "\x00" + struct.pack(">L", 0)
+        relay = buildRelayCell(self.hops[-1], relayTypeToCmdId("RELAY_BEGIN"), strId, payload)
+        self.send(relay)
+
 
 
 # recv next cell from network and return it
@@ -191,9 +205,13 @@ def recv_cell(io, cmd=None):
 print "getting consensus"
 consensus.fetchConsensus()
 
+FIRST_HOP = "orion"
+firstHopR = consensus.getRouter(FIRST_HOP)
+print firstHopR
+
 s = socket.socket()
 ssl_sock = ssl.wrap_socket(s)
-ssl_sock.connect(("94.242.246.24", 8080))
+ssl_sock.connect((firstHopR['ip'], int(firstHopR['orport'])))
 peerAddr= [int(x) for x in ssl_sock.getpeername()[0].split(".")]
 
 # Send our versions cell to get started
@@ -207,20 +225,19 @@ ssl_sock.send(cnetinf.pack())
 
 # CREATE CIRCUIT TO FIRST HOP
 circ = TorCircuit(ssl_sock, 1)
-circ.create("orion")
+circ.create(FIRST_HOP)
 created = recv_cell(ssl_sock)
-if created.cmdId != cellTypeToId("CREATED"):
-    print "errr not created"
-
 circ.handleCreated(created)
 
-# extend circuit
-for hop in ["gho", "southsea0", "tor26", "gho", "southsea0", "tor26", "gho", "southsea0"]:
+ #extend circuit
+for hop in ["TheVillage"]:
     circ.extend(hop)
     extended = recv_cell(ssl_sock)
     print ">>>-", extended
     circ.handleExtended(extended)
 
+circ.createStream(1, "nas.ghowen.me", 22)
+print decodeRelayCell(circ.decrypt(recv_cell(ssl_sock).payload))
 
 #if extended.cmdId != cellTypeToId("EXTENDED"):
 #    print "errr not EXTENDED"
@@ -255,8 +272,8 @@ for hop in ["gho", "southsea0", "tor26", "gho", "southsea0", "tor26", "gho", "so
 #ssl_sock.send(final)
 #
 #
-#while True:
-#    relay_reply = recv_cell(ssl_sock)
+while True:
+    print recv_cell(ssl_sock)
 #    relay_reply = t1.bwdCipher.decrypt(relay_reply.payload)
 #    print struct.unpack(">BHHLH", relay_reply[:11])
 #
