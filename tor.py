@@ -125,6 +125,56 @@ class CellVersions(Cell):
         Cell.payload = st
         return st
 
+class TorCircuit():
+    def __init__(self, sock, circid):
+        self.hops = []
+        self.circId = circid
+        self.socket = sock
+        self.tempX = 0
+        self.packetCount = 0
+
+#parse relaycell as str
+    def encrypt(self, relayCell):
+        for hop in self.hops[::-1]:
+            relayCell = hop.encrypt(relayCell)
+        return relayCell
+
+#parse relaycell as str
+    def decrypt(self, relayCell):
+        for hop in self.hops:
+            relayCell = hop.decrypt(relayCell)
+        return relayCell
+
+#firsthop as hash str
+    def create(self, firstHop):
+        (self.tempX, create) = buildCreatePayload(firstHop)
+        createcell = buildCell(self.circId, cellTypeToId("CREATE"), create)
+        self.socket.send(createcell)
+
+#parse full torcell
+    def handleCreated(self, cell):
+        assert cell.cmdId == cellTypeToId("CREATED")
+        created = cell.payload
+        t1 = decodeCreatedCell(created, self.tempX)
+        self.hops.append(t1)
+
+    def extend(self, hopHash):
+        (self.tempX,extend)=buildExtendPayload(hopHash)
+        extendr = buildRelayCell(self.hops[-1], relayTypeToCmdId("RELAY_EXTEND"), 0, extend)
+        extendr = self.encrypt(extendr)
+        self.socket.send(buildCell(self.circId, cellTypeToId("RELAY_EARLY"), extendr))
+
+#parse full torcell
+    def handleExtended(self, cell):
+        assert cell.cmdId == cellTypeToId("RELAY")
+        extended = self.decrypt(cell.payload)
+        relayDec = decodeRelayCell(extended)
+
+        assert relayDec['relayCmd'] == relayTypeToCmdId("RELAY_EXTENDED")
+        t2 = decodeCreatedCell(relayDec['payload'], self.tempX)
+        self.hops.append(t2)
+
+
 # recv next cell from network and return it
 # if cmd specified (class name), then wait for that cell and return it - discard others
 def recv_cell(io, cmd=None):
@@ -156,14 +206,27 @@ cnetinf = recv_cell(ssl_sock, 'CellNetInfo')
 ssl_sock.send(cnetinf.pack())
 
 # CREATE CIRCUIT TO FIRST HOP
-r = consensus.getRouter("orion")
-(x, create) = buildCreatePayload(r['identityhash'])
-createcell = buildCell(1, cellTypeToId("CREATE"), create)
-ssl_sock.send(createcell)
+circ = TorCircuit(ssl_sock, 1)
+circ.create("orion")
+created = recv_cell(ssl_sock)
+if created.cmdId != cellTypeToId("CREATED"):
+    print "errr not created"
+
+circ.handleCreated(created)
+
+# extend circuit
+for hop in ["gho", "southsea0", "tor26", "gho", "southsea0", "tor26", "gho", "southsea0"]:
+    circ.extend(hop)
+    extended = recv_cell(ssl_sock)
+    print ">>>-", extended
+    circ.handleExtended(extended)
+
+
+#if extended.cmdId != cellTypeToId("EXTENDED"):
+#    print "errr not EXTENDED"
+
+
 # RECEIVE CREATED CELL
-created = recv_cell(ssl_sock).payload
-t1 = decodeCreatedCell(created, x)
-print t1
 
 ##Build DIR CONNECT (ignore slashdot stuff, just junk payload
 #hostrel = "www.slashdot.org:80"
@@ -178,15 +241,6 @@ print t1
 #r = consensus.getRouter("gho")
 
 # EXTEND CIRCUIT - BUILD EXTEND CELL
-(x,extend)=buildExtendPayload(consensus.getRouter("gho")['identity'])
-extendr = buildRelayCell(t1, 6, 0, extend)
-ssl_sock.send(buildCell(1, cellTypeToId("RELAY_EARLY"), extendr))
-
-# RECEIVE EXTENDED CELL
-relay = recv_cell(ssl_sock).payload
-extended = t1.decrypt(relay)
-relayDec = decodeRelayCell(extended)
-t2 = decodeCreatedCell(relayDec['payload'], x)
 
 
 #print struct.unpack(">BHHLH", relay_reply[:11])

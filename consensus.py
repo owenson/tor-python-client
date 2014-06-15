@@ -44,14 +44,16 @@ def fetchConsensus():
 # Fetch router descrition array given name
 def getRouter(nm):
     for r in router.itervalues():
-        if r['nick'] == nm:
+        if nm.startswith("$") and r['identityhash'] == nm:
+            return r
+        elif r['nick'] == nm:
             return r
     return None
 
 # Fetch text router descriptor containing keys
 def getRouterDescriptor(identityhash):
-    if router[identityhash.decode('hex')]:
-        return getDoc("server/fp/"+identityhash)
+    if router[identityhash]:
+        return getDoc("server/fp/"+identityhash.encode("hex"))
     return None
 
 # parse router descriptor and return onion key in ber/der format for import into PyCrypto

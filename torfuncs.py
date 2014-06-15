@@ -44,6 +44,42 @@ cellTypes = {
          131: "AUTHENTICATE",
          132: "AUTHORIZE" }
 
+relayCellIds = {
+        1: "RELAY_BEGIN",
+         2: "RELAY_DATA",
+         3: "RELAY_END",
+         4: "RELAY_CONNECTED",
+         5: "RELAY_SENDME",
+         6: "RELAY_EXTEND",
+         7: "RELAY_EXTENDED",
+         8: "RELAY_TRUNCATE",
+         9: "RELAY_TRUNCATED",
+        10: "RELAY_DROP",
+        11: "RELAY_RESOLVE",
+        12: "RELAY_RESOLVED",
+        13: "RELAY_BEGIN_DIR",
+        14: "RELAY_EXTEND2",
+        15: "RELAY_EXTENDED2"
+        }
+
+def cellTypeToId(typ):
+    for (k,v) in cellTypes.iteritems():
+        if v == typ:
+            return k
+    raise IndexError("no such cell type")
+
+certTypes = {
+        1: "LINK",
+        2: "RSAIDENT",
+        3: "RSA AUTH" }
+
+def relayTypeToCmdId(typ):
+    for (k,v) in relayCellIds.iteritems():
+        if v == typ:
+            return k
+    raise IndexError("no such relay cmd")
+
+
 class TorHop:
     def __init__(self, KH, Df, Db, Kf, Kb):
         self.KH = KH
@@ -65,14 +101,6 @@ class TorHop:
         return self.fwdCipher.encrypt(data)
     def decrypt(self, data):
         return self.bwdCipher.decrypt(data)
-
-def cellTypeToId(typ):
-    return cellTypes.values().index(typ)
-
-certTypes = {
-        1: "LINK",
-        2: "RSAIDENT",
-        3: "RSA AUTH" }
 
 #according to tor spec, performs hybrid encrypt for create/etc
 def hybridEncrypt(rsa, m):
@@ -145,9 +173,10 @@ def numunpack(s):
     return int(s.encode("hex"),16)
 
 #returns private x and created pkt
-def buildCreatePayload(identityHash):
+def buildCreatePayload(nm):
 #get router rsa onion key
-    rd = consensus.getRouterDescriptor(identityHash)
+    r = consensus.getRouter(nm)
+    rd = consensus.getRouterDescriptor(r['identity'])
     rdk = consensus.getRouterOnionKey(rd)
     rsa = RSA.importKey(rdk)
 
@@ -173,14 +202,12 @@ def decodeCreatedCell(created, x):
     KK = StringIO(kdf_tor(numpack(xy, DH_LEN), 3*HASH_LEN + 2*KEY_LEN))
     (KH, Df, Db) = [KK.read(HASH_LEN) for i in range(3)]
     (Kf, Kb) = [KK.read(KEY_LEN) for i in range(2)]
-    if derkd == KH:
-        return TorHop(KH, Df, Db, Kf, Kb)
-    else:
-        print "derkd check failed"
-        sys.exit(0)
+    assert derkd == KH  #else keys dont match up - prob corrupt
+    return TorHop(KH, Df, Db, Kf, Kb)
 
 #constructs relay cell payload and encrypts to torhop
 def buildRelayCell(torhop, relCmd, streamId, data):
+    print relCmd
 #construct pkt
     pkt = struct.pack(">BHHLH", relCmd, 0, streamId, 0, len(data)) + data
     pkt += "\x00" * (509 - len(pkt))
@@ -188,9 +215,8 @@ def buildRelayCell(torhop, relCmd, streamId, data):
     torhop.fwdSha.update(pkt)
 #splice in hash
     pkt = pkt[0:5] + torhop.fwdSha.digest()[0:4] + pkt[9:]
-    print "relay contents: ", pkt.encode('hex')
 #encrypt
-    return torhop.encrypt(pkt)
+    return pkt
 
 #takes relay cell payload and decodes it
 def decodeRelayCell(cell):
@@ -200,11 +226,11 @@ def decodeRelayCell(cell):
 
 # must be wrapped in relay_early
 # builds extend cell to router identified by identity
-def buildExtendPayload(identityhash):
-    r = consensus.router[identityhash]
+def buildExtendPayload(nm):
+    r = consensus.getRouter(nm)
     ip = map(int,r['ip'].split("."))
     extend = struct.pack(">BBBBH", ip[0], ip[1], ip[2], ip[3], int(r['orport']))
-    (x, extendcc) = buildCreatePayload(r['identityhash'])
+    (x, extendcc) = buildCreatePayload(nm)
     extend += extendcc
     extend += r['identity']
     return (x, extend)
